@@ -121,13 +121,14 @@ export async function GET(
       found: false,
       barcode,
       product: null,
-      verdict: {
-        tier: "unknown",
-        reasoning: [
-          "This product is not in the database yet — please read the physical label.",
-        ],
-      },
+      verdict: computeVerdict(null),
     };
+    
+    // Override the reason for unknown fallback behavior just in case
+    for (const key in result.verdict.allergenVerdicts) {
+       result.verdict.allergenVerdicts[key].reasoning = ["This product is not in the database yet — please read the physical label."];
+    }
+    
     return NextResponse.json(result);
   }
 

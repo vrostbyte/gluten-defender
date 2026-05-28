@@ -1,20 +1,14 @@
-/**
- * Verdict Engine v1
- * -----------------
- * Turns raw Open Food Facts product data into a celiac-safety *verdict*: a
- * confidence TIER plus plain-language REASONING explaining why.
- *
- * Guiding rule from the PRD: this is DECISION SUPPORT, never a medical guarantee.
- * So we are deliberately CONSERVATIVE — when in doubt we choose "caution" or
- * "unknown" rather than risk a false "safe". The UI always tells the user to
- * verify the physical packaging, on every tier.
- *
- * This file is plain TypeScript (no browser/server-only code) so it can run in
- * the API route AND its types can be imported by the UI.
- */
+import {
+  ALLERGEN_REGISTRY,
+  AllergenDef,
+  AllergenVerdict,
+  AMBIGUOUS_INGREDIENTS,
+  DEFAULT_PROFILE,
+  evaluateAllergen,
+  VerdictTier,
+} from "./allergens/registry";
 
-/** The five possible safety tiers, from most to least confident. */
-export type VerdictTier = "safe" | "likely_safe" | "caution" | "unsafe" | "unknown";
+export type { VerdictTier, AllergenVerdict } from "./allergens/registry";
 
 /** Product data, normalized from Open Food Facts into the fields we care about. */
 export interface ProductData {
@@ -23,21 +17,24 @@ export interface ProductData {
   brand: string | null;
   imageUrl: string | null;
   ingredientsText: string | null;
-  /** Open Food Facts tags, e.g. ["en:gluten", "en:milk"]. */
   allergensTags: string[];
-  /** "May contain" / shared-facility traces, e.g. ["en:gluten"]. */
   tracesTags: string[];
-  /** Labels/certifications, e.g. ["en:gluten-free", "en:organic"]. */
   labelsTags: string[];
-  /** Additives, e.g. ["en:e330"]. (Reserved for future verdict signals.) */
   additivesTags: string[];
 }
 
-/** The verdict the engine produces. */
-export interface Verdict {
+export interface IngredientToken {
+  text: string;
+  isAllergen?: boolean;
+  allergenId?: string;
+  isAmbiguous?: boolean;
+}
+
+/** The full verdict returned for a product */
+export interface OverallVerdict {
   tier: VerdictTier;
-  /** Short, human-readable evidence strings, shown to the user. */
-  reasoning: string[];
+  allergenVerdicts: Record<string, AllergenVerdict>;
+  ingredientHighlights: IngredientToken[];
 }
 
 /** The full response our API route returns to the client. */
@@ -45,110 +42,149 @@ export interface ProductLookupResult {
   found: boolean;
   barcode: string;
   product: ProductData | null;
-  verdict: Verdict;
+  verdict: OverallVerdict;
 }
 
-/**
- * Hidden-gluten keyword list. A match in the ingredients text counts as a gluten
- * source. Kept here, lowercase, so it is easy to expand later.
- * NOTE: "malt" already covers "malt extract" via substring matching, but we keep
- * the explicit phrase for clarity/documentation.
- */
-export const GLUTEN_KEYWORDS = [
-  "wheat",
-  "barley",
-  "rye",
-  "malt",
-  "malt extract",
-  "brewer's yeast",
-  "triticale",
-  "spelt",
-  "farro",
-  "semolina",
-  "durum",
-] as const;
+const TIER_WEIGHT: Record<VerdictTier, number> = {
+  unsafe: 4,
+  caution: 3,
+  unknown: 2,
+  likely_safe: 1,
+  safe: 0,
+};
 
-/** Open Food Facts uses this tag to mark certified/declared gluten-free. */
-const GLUTEN_FREE_LABELS = ["en:gluten-free", "en:no-gluten"];
+function getWorstTier(tiers: VerdictTier[]): VerdictTier {
+  if (tiers.length === 0) return "unknown";
+  return tiers.reduce((worst, current) =>
+    TIER_WEIGHT[current] > TIER_WEIGHT[worst] ? current : worst
+  );
+}
 
-/**
- * Compute the verdict for a product. Pass `null` when no product data exists.
- *
- * Logic, in strict priority order (first match wins):
- *   1. No usable data            -> "unknown"
- *   2. Gluten source present     -> "unsafe"
- *   3. "May contain" gluten      -> "caution"
- *   4. Oats (not certified GF)   -> "caution"   (oats are cross-contaminated often)
- *   5. Certified GF + no gluten  -> "safe"
- *   6. Otherwise                 -> "likely_safe"
- */
-export function computeVerdict(product: ProductData | null): Verdict {
-  // --- 1. Nothing to judge ---
-  const hasSignals =
-    !!product &&
-    (!!product.ingredientsText ||
-      product.allergensTags.length > 0 ||
-      product.labelsTags.length > 0 ||
-      product.tracesTags.length > 0);
+interface MatchSpan {
+  start: number;
+  end: number;
+  isAllergen: boolean;
+  allergenId?: string;
+  isAmbiguous: boolean;
+}
 
-  if (!product || !hasSignals) {
+function buildHighlights(
+  text: string | null,
+  registry: AllergenDef[]
+): IngredientToken[] {
+  if (!text) return [];
+
+  const spans: MatchSpan[] = [];
+
+  // Helper to find and add spans
+  const addSpans = (
+    keywords: string[],
+    isAllergen: boolean,
+    allergenId?: string,
+    isAmbiguous = false
+  ) => {
+    for (const kw of keywords) {
+      const escapedKw = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(`\\b${escapedKw}\\b`, "gi");
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        spans.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          isAllergen,
+          allergenId,
+          isAmbiguous,
+        });
+      }
+    }
+  };
+
+  // Find all matches
+  for (const allergen of registry) {
+    addSpans(allergen.definiteKeywords, true, allergen.id);
+  }
+  addSpans(AMBIGUOUS_INGREDIENTS, false, undefined, true);
+
+  if (spans.length === 0) {
+    return [{ text }];
+  }
+
+  // Sort spans by start index, then by length (longest first)
+  spans.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    return (b.end - b.start) - (a.end - a.start);
+  });
+
+  // Filter overlapping spans (keep the first, which is longest due to sort)
+  const filteredSpans: MatchSpan[] = [];
+  let lastEnd = 0;
+  for (const span of spans) {
+    if (span.start >= lastEnd) {
+      filteredSpans.push(span);
+      lastEnd = span.end;
+    }
+  }
+
+  // Build tokens
+  const tokens: IngredientToken[] = [];
+  let currentIndex = 0;
+  for (const span of filteredSpans) {
+    if (span.start > currentIndex) {
+      tokens.push({ text: text.substring(currentIndex, span.start) });
+    }
+    tokens.push({
+      text: text.substring(span.start, span.end),
+      isAllergen: span.isAllergen,
+      allergenId: span.allergenId,
+      isAmbiguous: span.isAmbiguous,
+    });
+    currentIndex = span.end;
+  }
+  if (currentIndex < text.length) {
+    tokens.push({ text: text.substring(currentIndex) });
+  }
+
+  return tokens;
+}
+
+export function computeVerdict(product: ProductData | null): OverallVerdict {
+  const allergenVerdicts: Record<string, AllergenVerdict> = {};
+
+  if (!product) {
+    for (const allergen of ALLERGEN_REGISTRY) {
+      allergenVerdicts[allergen.id] = {
+        tier: "unknown",
+        reasoning: ["Product not found."],
+      };
+    }
     return {
       tier: "unknown",
-      reasoning: [
-        "Not enough information about this product to judge — please read the physical label.",
-      ],
+      allergenVerdicts,
+      ingredientHighlights: [],
     };
   }
 
-  // Normalize everything to lowercase so comparisons are reliable.
-  const ingredients = (product.ingredientsText ?? "").toLowerCase();
-  const allergens = product.allergensTags.map((t) => t.toLowerCase());
-  const traces = product.tracesTags.map((t) => t.toLowerCase());
-  const labels = product.labelsTags.map((t) => t.toLowerCase());
+  const profileTiers: VerdictTier[] = [];
 
-  const certifiedGlutenFree = GLUTEN_FREE_LABELS.some((l) => labels.includes(l));
-  const reasoning: string[] = [];
+  for (const allergen of ALLERGEN_REGISTRY) {
+    const verdict = evaluateAllergen(product, allergen);
+    allergenVerdicts[allergen.id] = verdict;
 
-  // --- 2. Definite gluten source -> unsafe ---
-  const allergenListsGluten = allergens.includes("en:gluten");
-  const matchedKeywords = GLUTEN_KEYWORDS.filter((kw) => ingredients.includes(kw));
-
-  if (allergenListsGluten || matchedKeywords.length > 0) {
-    if (allergenListsGluten) reasoning.push("Allergen tag lists gluten.");
-    if (matchedKeywords.length > 0) {
-      reasoning.push(
-        `Ingredients mention a gluten source: ${matchedKeywords.join(", ")}.`,
-      );
+    if (DEFAULT_PROFILE.includes(allergen.id)) {
+      profileTiers.push(verdict.tier);
     }
-    return { tier: "unsafe", reasoning };
   }
 
-  // --- 3. Cross-contamination / "may contain" -> caution ---
-  if (traces.includes("en:gluten")) {
-    reasoning.push(
-      'Label warns it may contain gluten (e.g. "may contain" or a shared facility).',
-    );
-    return { tier: "caution", reasoning };
-  }
+  // PRD: "preserve the existing behavior for products not found, no-data/unknown, and network errors"
+  // If no signals are present for ANY allergen, the evaluateAllergen engine returns "unknown" for all of them.
+  // The worst tier of ["unknown", "unknown"] is "unknown", which handles the no-data case properly.
 
-  // --- 4. Oats: caution unless certified gluten-free ---
-  // "oat" matches oat, oats, oatmeal. Oats are naturally gluten-free but are
-  // very commonly cross-contaminated, so many celiacs avoid non-certified oats.
-  if (ingredients.includes("oat") && !certifiedGlutenFree) {
-    reasoning.push(
-      "Contains oats, which are frequently cross-contaminated with gluten and are not certified gluten-free here.",
-    );
-    return { tier: "caution", reasoning };
-  }
+  const overallTier = getWorstTier(profileTiers);
+  const ingredientHighlights = buildHighlights(product.ingredientsText, ALLERGEN_REGISTRY);
 
-  // --- 5. Certified gluten-free, with no gluten signals -> safe ---
-  if (certifiedGlutenFree) {
-    reasoning.push("Label: certified gluten-free.");
-    reasoning.push("No gluten ingredients detected.");
-    return { tier: "safe", reasoning };
-  }
-
-  // --- 6. No gluten found, but no certification -> likely safe ---
-  reasoning.push("No gluten ingredients detected, but it is not certified gluten-free.");
-  return { tier: "likely_safe", reasoning };
+  return {
+    tier: overallTier,
+    allergenVerdicts,
+    ingredientHighlights,
+  };
 }
