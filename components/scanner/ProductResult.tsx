@@ -139,7 +139,7 @@ export default function ProductResult({
             />
           )}
           <div className="min-w-0">
-            <p className="truncate text-lg font-semibold text-gray-900">
+            <p className="line-clamp-2 text-lg font-semibold text-gray-900">
               {product.name ?? "Unnamed product"}
             </p>
             {product.brand && (
