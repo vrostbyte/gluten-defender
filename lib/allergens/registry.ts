@@ -28,6 +28,7 @@ export interface AllergenVerdict {
 }
 
 export interface ProductDataSlim {
+  name?: string | null;
   ingredientsText: string | null;
   allergensTags: string[];
   tracesTags: string[];
@@ -134,20 +135,49 @@ function findKeywords(text: string, keywords: string[]): string[] {
 }
 
 /**
+ * Checks if any keyword matches within the product name, using word boundaries.
+ * Case-insensitive. Includes a negation guard: if a word like "free" or "without"
+ * appears within 3 words after the keyword, it's NOT considered a positive match.
+ */
+function findKeywordsInName(text: string, keywords: string[]): string[] {
+  if (!text) return [];
+  const found: string[] = [];
+  
+  for (const kw of keywords) {
+    const escapedKw = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`\\b${escapedKw}\\b`, "ig");
+    let match;
+    let keywordFound = false;
+    while ((match = regex.exec(text)) !== null) {
+      const after = text.slice(match.index + match[0].length);
+      const nextWords = after
+        .split(/[\s,.;:()-]+/)
+        .filter((w) => w.length > 0)
+        .slice(0, 3)
+        .map((w) => w.toLowerCase());
+      const isNegated = nextWords.some(
+        (w) => w === "free" || w === "free-from" || w === "no" || w === "without"
+      );
+      if (!isNegated) {
+        keywordFound = true;
+        break;
+      }
+    }
+    if (keywordFound && !found.includes(kw)) {
+      found.push(kw);
+    }
+  }
+  return found;
+}
+
+/**
  * The core engine logic evaluating a product for a specific allergen.
  */
 export function evaluateAllergen(
   product: ProductDataSlim | null,
   allergen: AllergenDef
 ): AllergenVerdict {
-  const hasSignals =
-    !!product &&
-    (!!product.ingredientsText ||
-      product.allergensTags.length > 0 ||
-      product.labelsTags.length > 0 ||
-      product.tracesTags.length > 0);
-
-  if (!product || !hasSignals) {
+  if (!product) {
     return {
       tier: "unknown",
       reasoning: [
@@ -180,18 +210,38 @@ export function evaluateAllergen(
 
   const reasoning: string[] = [];
 
-  // --- Definite source -> unsafe ---
+  // --- Definite source -> unsafe / caution ---
   const allergenTagMatch = allergen.allergenTags.some((t) => allergens.includes(t));
   const matchedKeywords = findKeywords(ingredients, allergen.definiteKeywords);
+  const matchedNameKeywords = findKeywordsInName(product.name || "", allergen.definiteKeywords);
 
-  if (allergenTagMatch || matchedKeywords.length > 0) {
+  if (allergenTagMatch || matchedKeywords.length > 0 || matchedNameKeywords.length > 0) {
+    let tier: VerdictTier = "unsafe";
+
     if (allergenTagMatch) reasoning.push(`Allergen tag lists ${allergen.label}.`);
+    
     if (matchedKeywords.length > 0) {
       reasoning.push(
         `Ingredients mention a ${allergen.label} source: ${matchedKeywords.join(", ")}.`
       );
     }
-    return { tier: "unsafe", reasoning };
+
+    if (matchedNameKeywords.length > 0) {
+      if (matchedKeywords.length > 0) {
+        reasoning.push(`Product name suggests ${allergen.label} ('${matchedNameKeywords[0]}').`);
+      } else if (ingredients.trim().length > 0) {
+        tier = "caution";
+        reasoning.push(`Name suggests ${allergen.label} but ingredients don't list it — verify the package.`);
+      } else {
+        tier = "unsafe";
+        reasoning.push(`Product name suggests ${allergen.label}; ingredients data unavailable — treat as unsafe until verified.`);
+      }
+    }
+
+    if (tier === "unsafe" || tier === "caution") {
+      if (allergenTagMatch) tier = "unsafe";
+      return { tier, reasoning };
+    }
   }
 
   // --- Cross-contamination / "may contain" -> caution ---
@@ -220,40 +270,42 @@ export function evaluateAllergen(
   }
 
   // --- Caution keywords -> caution (if not certified free) ---
-  if (allergen.cautionKeywords) {
-    const matchedCaution = findKeywords(ingredients, allergen.cautionKeywords);
-    if (matchedCaution.length > 0 && !certifiedFree) {
-      reasoning.push(
-        `Contains ${matchedCaution.join(", ")}, which are frequently cross-contaminated with ${allergen.label} and are not certified free here.`
-      );
-      return { tier: "caution", reasoning };
-    }
+  const matchedCaution = allergen.cautionKeywords ? findKeywords(ingredients, allergen.cautionKeywords) : [];
+  if (matchedCaution.length > 0 && !certifiedFree) {
+    reasoning.push(
+      `Contains ${matchedCaution.join(", ")}, which are frequently cross-contaminated with ${allergen.label} and are not certified free here.`
+    );
+    return { tier: "caution", reasoning };
   }
-
-  // --- Milk-specific false safety guard ---
-  // If milk, and no definite sources, but it says "non-dairy" and is NOT explicitly certified vegan/dairy-free
-  // Wait, if it has a false safety keyword but wasn't certified, maybe we just note it or it falls through to likely safe.
-  // Actually, PRD says: 'do NOT treat "lactose-free", "non-dairy", or "dairy-free" as proof of safety — they don't mean milk-protein-free.'
-  // This just means we shouldn't set `tier: "safe"` just because those words are present. 
-  // We already don't use them to set "safe". We only use `certifiedFreeLabels` to set "safe".
-  // For milk, our `certifiedFreeLabels` are `["en:dairy-free", "en:milk-free", "en:vegan"]`.
-  // Wait, if "dairy-free" is in `certifiedFreeLabels`, then we DO treat it as proof of safety.
-  // The PRD says: "Milk-specific guards (hardcode): do NOT treat "lactose-free", "non-dairy", or "dairy-free" as proof of safety — they don't mean milk-protein-free."
-  // So I should remove "en:dairy-free" from milk's `certifiedFreeLabels` and explicitly add a guard.
 
   // --- Certified free -> safe ---
   if (certifiedFree) {
-    reasoning.push(`Label: certified ${allergen.label}-free.`);
+    // Oat caveat: if gluten and it has oats, even if certified free, we flag caution.
+    // Why: The FDA gluten-free label does not require celiac-safe oat sourcing, and many celiacs react.
+    if (allergen.id === "gluten" && matchedCaution.length > 0) {
+      reasoning.push(
+        `Contains ${matchedCaution.join(", ")}. While this product carries a gluten-free label, many oats are cross-contaminated with gluten and many people with celiac react to non-certified-gluten-free oats. Verify the package specifies certified gluten-free oats.`
+      );
+      return { tier: "caution", reasoning };
+    }
+
+    reasoning.push(`Label indicates ${allergen.label}-free (note: this may be the manufacturer's self-declared compliance with FDA labeling rules, not necessarily third-party certified).`);
     reasoning.push(`No ${allergen.label} ingredients detected.`);
     return { tier: "safe", reasoning };
+  }
+
+  // --- Empty data -> unknown ---
+  if (!ingredients.trim() && allergens.length === 0 && traces.length === 0 && labels.length === 0) {
+    return {
+      tier: "unknown",
+      reasoning: ["Insufficient product data to evaluate; read the label."]
+    };
   }
 
   // --- Else -> likely safe ---
   reasoning.push(`No ${allergen.label} ingredients detected, but it is not certified ${allergen.label}-free.`);
   
   if (hasMilkFalseSafety && isMilk) {
-    // If it claims lactose-free/non-dairy but we reached here, it's just likely safe (or we could make it caution?).
-    // The PRD doesn't say it MAKES it caution, just that it DOES NOT prove safety.
     reasoning.push(`Note: "lactose-free" or "non-dairy" claims do not guarantee it is free of milk proteins.`);
   }
 
