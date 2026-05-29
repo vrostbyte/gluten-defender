@@ -208,14 +208,15 @@ export function evaluateAllergen(
   if (matchedAmbiguous.length > 0 && !certifiedFree) {
     if (allergen.mandatoryDisclosure) {
       reasoning.push(
-        `Contains ambiguous ingredients (${matchedAmbiguous.join(", ")}) without ${allergen.label}-free certification.`
+        `Contains ambiguous ingredients (${matchedAmbiguous.join(", ")}). Since ${allergen.label} must be legally disclosed if used, this is low risk.`
       );
+      // We do not return here; allow it to fall through to likely_safe (or caution if other signals exist).
     } else {
       reasoning.push(
         `Contains ${matchedAmbiguous.join(", ")}, which can hide ${allergen.label} and isn't required to be disclosed unless the product is certified free.`
       );
+      return { tier: "caution", reasoning };
     }
-    return { tier: "caution", reasoning };
   }
 
   // --- Caution keywords -> caution (if not certified free) ---

@@ -108,6 +108,15 @@ export default function ProductResult({
 
   return (
     <div className="flex flex-col gap-4 pb-8">
+      {/* Background tint overlay (stops above the bottom nav so we don't tint the chrome) */}
+      {(verdict.tier === "unsafe" || verdict.tier === "caution") && (
+        <div 
+          className={`fixed inset-0 -z-10 ${
+            verdict.tier === "unsafe" ? "bg-red-50" : "bg-amber-50"
+          }`} 
+          aria-hidden="true"
+        />
+      )}
       {/* Verdict card */}
       <div className={`rounded-2xl border p-5 ${display.card}`}>
         <span
