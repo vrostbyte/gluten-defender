@@ -5,23 +5,20 @@ import {
   type ProductLookupResult,
 } from "@/lib/verdict";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { DEFAULT_PROFILE, VerdictTier } from "@/lib/allergens/registry";
 import type { AllergenProfileItem } from "@/lib/supabase/database.types";
 
 /**
  * GET /api/product/[barcode]
  * --------------------------
- * Looks up a product by barcode on Open Food Facts (OFF) and returns it together
- * with our computed gluten-safety verdict.
- *
- * WHY this lives server-side (a Next.js Route Handler): the PRD requires that all
- * third-party APIs are called from the server, never the browser. That lets us
- * control the request, attach a proper User-Agent, and later add caching — and it
- * keeps any future keys off the client.
+ * Looks up a product by barcode. Cache-first strategy:
+ * 1. Check local Supabase cache.
+ * 2. If hit and fresh, use cached data.
+ * 3. If miss or stale, fetch from Open Food Facts, write to cache.
+ * 4. Compute verdict at request time using the current registry (never cached).
  */
 
-// The exact OFF fields we ask for. Requesting only what we need keeps the
-// response small and fast.
 const OFF_FIELDS = [
   "product_name",
   "brands",
@@ -33,12 +30,11 @@ const OFF_FIELDS = [
   "additives_tags",
 ].join(",");
 
-// OFF asks every app to identify itself in the User-Agent header.
 const USER_AGENT = "GlutenDefender/0.1 (dev)";
+const CACHE_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days freshness window
 
-/** The slice of the OFF JSON response we actually read. */
 interface OffResponse {
-  status: 0 | 1; // 1 = product found, 0 = not found
+  status: 0 | 1;
   product?: {
     product_name?: string;
     brands?: string;
@@ -51,12 +47,13 @@ interface OffResponse {
   };
 }
 
-/** Convert OFF's raw product object into our normalized ProductData shape. */
-function toProductData(
-  barcode: string,
-  off: NonNullable<OffResponse["product"]>,
-): ProductData {
-  // OFF uses empty strings for missing text; turn those into null for clarity.
+// Ensure returned ProductData includes the new fields
+export interface APIProductLookupResult extends ProductLookupResult {
+  isSavedByUser: boolean;
+  isSignedIn: boolean;
+}
+
+function toProductData(barcode: string, off: NonNullable<OffResponse["product"]>): ProductData {
   const clean = (value?: string) => {
     const trimmed = value?.trim();
     return trimmed ? trimmed : null;
@@ -79,68 +76,22 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ barcode: string }> },
 ) {
-  // In this version of Next.js, route params are async and must be awaited.
   const { barcode: rawBarcode } = await params;
-
-  // Barcodes are numeric; strip anything else to avoid malformed upstream calls.
   const barcode = rawBarcode.replace(/\D/g, "");
   if (!barcode) {
-    return NextResponse.json(
-      { error: "A numeric barcode is required." },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "A numeric barcode is required." }, { status: 400 });
   }
 
-  const url = `https://world.openfoodfacts.org/api/v2/product/${barcode}.json?fields=${OFF_FIELDS}`;
-
-  let off: OffResponse;
-  try {
-    const response = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
-      // No caching yet — Phase 1b will add a Supabase-backed cache.
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      // Upstream returned an HTTP error (e.g. 500/429). Treat as a service problem.
-      return NextResponse.json(
-        { error: "Could not reach the product database. Please try again." },
-        { status: 502 },
-      );
-    }
-
-    off = (await response.json()) as OffResponse;
-  } catch {
-    // Network failure / timeout / invalid JSON.
-    return NextResponse.json(
-      { error: "Network error while looking up the product. Please try again." },
-      { status: 502 },
-    );
-  }
-
-  // --- Product not found (OFF signals this with status 0) ---
-  if (off.status !== 1 || !off.product) {
-    const result: ProductLookupResult = {
-      found: false,
-      barcode,
-      product: null,
-      verdict: computeVerdict(null),
-    };
-    
-    // Override the reason for unknown fallback behavior just in case
-    for (const key in result.verdict.allergenVerdicts) {
-       result.verdict.allergenVerdicts[key].reasoning = ["This product is not in the database yet — please read the physical label."];
-    }
-    
-    return NextResponse.json(result);
-  }
-
-  // --- Profile fetch ---
+  // --- Profile fetch & Saved fetch ---
   let activeProfile = DEFAULT_PROFILE;
+  let isSavedByUser = false;
+  let isSignedIn = false;
+  
+  const supabase = await getSupabaseServerClient();
   try {
-    const supabase = await getSupabaseServerClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
+      isSignedIn = true;
       const { data: profile } = await supabase
         .from("user_profiles")
         .select("allergens")
@@ -150,14 +101,128 @@ export async function GET(
       if (profile && profile.allergens && profile.allergens.length > 0) {
         activeProfile = profile.allergens.map((a: AllergenProfileItem) => a.allergen_id);
       }
+
+      // Check if product is saved by user
+      const { data: savedRow } = await supabase
+        .from("saved_products")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("product_barcode", barcode)
+        .maybeSingle();
+      if (savedRow) {
+        isSavedByUser = true;
+      }
     }
   } catch (error) {
     // Fall back gracefully to DEFAULT_PROFILE
   }
 
-  // --- Product found: normalize, run the verdict, return both ---
-  const product = toProductData(barcode, off.product);
-  const verdict = computeVerdict(product);
+  // --- CACHE-FIRST FETCH ---
+  const adminSupabase = getSupabaseAdminClient();
+  
+  let cachedProductData: ProductData | null = null;
+  let isCacheFresh = false;
+
+  try {
+    const { data: cachedRow } = await adminSupabase
+      .from("products")
+      .select("*")
+      .eq("barcode", barcode)
+      .maybeSingle();
+
+    if (cachedRow) {
+      cachedProductData = {
+        barcode: cachedRow.barcode,
+        name: cachedRow.name,
+        brand: cachedRow.brand,
+        imageUrl: cachedRow.image_url,
+        ingredientsText: cachedRow.ingredients_text,
+        allergensTags: cachedRow.allergens_tags,
+        tracesTags: cachedRow.traces_tags,
+        labelsTags: cachedRow.labels_tags,
+        additivesTags: cachedRow.additives_tags,
+      };
+
+      const ageInSeconds = (new Date().getTime() - new Date(cachedRow.last_fetched_at).getTime()) / 1000;
+      if (ageInSeconds < CACHE_TTL_SECONDS) {
+        isCacheFresh = true;
+      }
+    }
+  } catch (e) {
+    console.error("Cache read failed", e);
+  }
+
+  let finalProductData: ProductData | null = null;
+  let usingStaleCacheFallback = false;
+
+  if (cachedProductData && isCacheFresh) {
+    finalProductData = cachedProductData;
+  } else {
+    // CACHE MISS or STALE: Fetch from OFF
+    const url = `https://world.openfoodfacts.org/api/v2/product/${barcode}.json?fields=${OFF_FIELDS}`;
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error("HTTP " + response.status);
+      }
+
+      const off = (await response.json()) as OffResponse;
+      if (off.status === 1 && off.product) {
+        finalProductData = toProductData(barcode, off.product);
+
+        // Upsert into cache asynchronously
+        await adminSupabase.from("products").upsert({
+          barcode,
+          name: finalProductData.name,
+          brand: finalProductData.brand,
+          image_url: finalProductData.imageUrl,
+          ingredients_text: finalProductData.ingredientsText,
+          allergens_tags: finalProductData.allergensTags,
+          traces_tags: finalProductData.tracesTags,
+          labels_tags: finalProductData.labelsTags,
+          additives_tags: finalProductData.additivesTags,
+          raw_off_data: off as any,
+          last_fetched_at: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.error("OFF fetch failed", e);
+      // Fallback: Use stale cache if available
+      if (cachedProductData) {
+        finalProductData = cachedProductData;
+        usingStaleCacheFallback = true;
+      }
+    }
+  }
+
+  // --- Product not found ---
+  if (!finalProductData) {
+    const result: APIProductLookupResult = {
+      found: false,
+      barcode,
+      product: null,
+      verdict: computeVerdict(null),
+      isSavedByUser,
+      isSignedIn,
+    };
+    for (const key in result.verdict.allergenVerdicts) {
+       result.verdict.allergenVerdicts[key].reasoning = ["This product is not in the database yet — please read the physical label."];
+    }
+    return NextResponse.json(result);
+  }
+
+  // --- Compute Verdict ---
+  const verdict = computeVerdict(finalProductData);
+
+  if (usingStaleCacheFallback) {
+    for (const key in verdict.allergenVerdicts) {
+      verdict.allergenVerdicts[key].reasoning.push("Showing cached data; could not reach the product database.");
+    }
+  }
 
   // Recalculate worst tier based on active profile, if it's different
   if (activeProfile !== DEFAULT_PROFILE) {
@@ -181,11 +246,13 @@ export async function GET(
     verdict.tier = worstTier;
   }
 
-  const result: ProductLookupResult = {
+  const result: APIProductLookupResult = {
     found: true,
     barcode,
-    product,
+    product: finalProductData,
     verdict,
+    isSavedByUser,
+    isSignedIn,
   };
   return NextResponse.json(result);
 }

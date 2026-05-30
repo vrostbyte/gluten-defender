@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ProductLookupResult } from "@/lib/verdict";
+import type { APIProductLookupResult } from "./ProductResult";
 import BarcodeScanner from "./BarcodeScanner";
 import ManualEntry from "./ManualEntry";
 import ProductResult from "./ProductResult";
@@ -23,7 +24,7 @@ import ProductResult from "./ProductResult";
 type Lookup =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "done"; result: ProductLookupResult }
+  | { status: "done"; result: APIProductLookupResult }
   | { status: "error"; message: string };
 
 export default function ScanExperience() {
@@ -57,7 +58,7 @@ export default function ScanExperience() {
           const body = (await res.json().catch(() => null)) as { error?: string } | null;
           throw new Error(body?.error ?? "Something went wrong looking up the product.");
         }
-        return (await res.json()) as ProductLookupResult;
+        return (await res.json()) as APIProductLookupResult;
       })
       .then((result) => {
         if (!cancelled) setLookup({ status: "done", result });

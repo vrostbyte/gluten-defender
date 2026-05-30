@@ -1,8 +1,38 @@
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import EditableProfile from "@/components/profile/EditableProfile";
+import { computeVerdict, type ProductData } from "@/lib/verdict";
+import { DEFAULT_PROFILE, VerdictTier } from "@/lib/allergens/registry";
+import { unsaveProductAction } from "@/app/actions/saveProduct";
 
 export const metadata = { title: "Profile" };
+
+function getWorstTier(productData: ProductData): VerdictTier {
+  const verdict = computeVerdict(productData);
+  const TIER_WEIGHT: Record<VerdictTier, number> = {
+    unsafe: 4,
+    caution: 3,
+    unknown: 2,
+    likely_safe: 1,
+    safe: 0,
+  };
+  let worstTier: VerdictTier = "safe";
+  for (const allergenId of DEFAULT_PROFILE) {
+    const t = verdict.allergenVerdicts[allergenId]?.tier || "unknown";
+    if (TIER_WEIGHT[t] > TIER_WEIGHT[worstTier]) {
+      worstTier = t;
+    }
+  }
+  return worstTier;
+}
+
+const TIER_COLORS: Record<VerdictTier, string> = {
+  safe: "bg-green-100 text-green-800",
+  likely_safe: "bg-lime-100 text-lime-800",
+  caution: "bg-amber-100 text-amber-800",
+  unsafe: "bg-red-100 text-red-800",
+  unknown: "bg-gray-100 text-gray-800",
+};
 
 export default async function ProfilePage() {
   const supabase = await getSupabaseServerClient();
@@ -48,6 +78,28 @@ export default async function ProfilePage() {
   const allergens = profile?.allergens || [];
   const displayName = profile?.display_name;
 
+  // Fetch saved products
+  const { data: savedProducts } = await supabase
+    .from("saved_products")
+    .select(`
+      saved_at,
+      product_barcode,
+      products (
+        barcode,
+        name,
+        brand,
+        image_url,
+        ingredients_text,
+        allergens_tags,
+        traces_tags,
+        labels_tags,
+        additives_tags
+      )
+    `)
+    .eq("user_id", user.id)
+    .order("saved_at", { ascending: false })
+    .limit(50);
+
   return (
     <div className="flex min-h-screen flex-col p-4 pb-20">
       <h1 className="mb-6 mt-4 text-2xl font-bold text-gray-900">Profile</h1>
@@ -64,6 +116,75 @@ export default async function ProfilePage() {
           initialAllergens={allergens} 
           quizCompletedAt={profile?.quiz_completed_at || null} 
         />
+      </div>
+
+      <div className="mb-8">
+        <h2 className="mb-3 text-lg font-bold text-gray-900">Saved products</h2>
+        {(!savedProducts || savedProducts.length === 0) ? (
+          <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6 text-center text-gray-500">
+            You haven&apos;t saved any products yet. Tap Save on a scan result to keep it here.
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {savedProducts.length === 50 && (
+              <p className="mb-1 text-xs text-gray-500">Showing your 50 most recent saves</p>
+            )}
+            {savedProducts.map((saved) => {
+              // The join returns an array if one-to-many, but one-to-one or many-to-one returns object/array.
+              // In supabase-js, with referencing a single row it's an object, but sometimes an array.
+              // We'll handle both just in case.
+              const pArray = Array.isArray(saved.products) ? saved.products : [saved.products];
+              const p = pArray[0] as any;
+              
+              if (!p) return null;
+              
+              const productData: ProductData = {
+                barcode: p.barcode,
+                name: p.name,
+                brand: p.brand,
+                imageUrl: p.image_url,
+                ingredientsText: p.ingredients_text,
+                allergensTags: p.allergens_tags,
+                tracesTags: p.traces_tags,
+                labelsTags: p.labels_tags,
+                additivesTags: p.additives_tags,
+              };
+              
+              const tier = getWorstTier(productData);
+              const removeAction = unsaveProductAction.bind(null, p.barcode);
+
+              return (
+                <div key={p.barcode} className="relative flex overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+                  <Link href={`/products/${p.barcode}`} className="flex flex-1 items-center gap-3 p-3 active:bg-gray-50">
+                    {p.image_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={p.image_url} alt={p.name || "Product"} className="h-14 w-14 shrink-0 rounded-lg object-contain bg-gray-50" />
+                    ) : (
+                      <div className="h-14 w-14 shrink-0 rounded-lg bg-gray-100" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="line-clamp-1 font-semibold text-gray-900">{p.name || "Unnamed product"}</p>
+                      <p className="truncate text-xs text-gray-500">{p.brand}</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${TIER_COLORS[tier]}`}>
+                          {tier.replace('_', ' ')}
+                        </span>
+                        <span className="text-[10px] text-gray-400">{p.barcode}</span>
+                      </div>
+                    </div>
+                  </Link>
+                  <div className="flex items-center justify-center border-l border-gray-100 bg-gray-50 px-3">
+                    <form action={removeAction}>
+                      <button type="submit" className="p-2 text-sm font-medium text-red-600 active:text-red-800">
+                        Remove
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <form action="/auth/sign-out" method="POST" className="mt-auto">

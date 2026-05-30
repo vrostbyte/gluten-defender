@@ -1,5 +1,15 @@
+"use client"
+
+import { useState, useTransition } from "react";
 import { ALLERGEN_REGISTRY, DEFAULT_PROFILE, VerdictTier } from "@/lib/allergens/registry";
+import { saveProductAction, unsaveProductAction } from "@/app/actions/saveProduct";
+
+// We duplicate the API type here to avoid circular imports from route.ts
 import type { ProductLookupResult } from "@/lib/verdict";
+export interface APIProductLookupResult extends ProductLookupResult {
+  isSavedByUser: boolean;
+  isSignedIn: boolean;
+}
 
 /**
  * ProductResult
@@ -7,10 +17,6 @@ import type { ProductLookupResult } from "@/lib/verdict";
  * Shows the outcome of a lookup: the safety tier (color-coded AND labeled in
  * words, never color alone), the product details, and the reasoning behind the
  * verdict so the user can judge for themselves.
- *
- * HARD RULE from the PRD: every tier — including "safe" — shows a persistent
- * "verify the physical packaging" notice. This app is decision support, not a
- * medical guarantee.
  */
 
 const TIER_DISPLAY: Record<
@@ -92,11 +98,13 @@ function AllergenPill({ allergenId, tier }: { allergenId: string; tier: VerdictT
 export default function ProductResult({
   result,
   onRescan,
+  isSavedPage = false,
 }: {
-  result: ProductLookupResult;
-  onRescan: () => void;
+  result: APIProductLookupResult;
+  onRescan?: () => void;
+  isSavedPage?: boolean;
 }) {
-  const { found, product, verdict } = result;
+  const { found, product, verdict, isSavedByUser, isSignedIn } = result;
   const display = TIER_DISPLAY[verdict.tier];
 
   const profiledAllergens = ALLERGEN_REGISTRY.filter((a) => DEFAULT_PROFILE.includes(a.id));
@@ -106,9 +114,33 @@ export default function ProductResult({
     return t === "unsafe" || t === "caution";
   });
 
+  const [isSaved, setIsSaved] = useState(isSavedByUser);
+  const [isPending, startTransition] = useTransition();
+
+  const handleToggleSave = () => {
+    if (!found || !product || !isSignedIn) return;
+    
+    // Optimistic update
+    const newSavedState = !isSaved;
+    setIsSaved(newSavedState);
+
+    startTransition(async () => {
+      try {
+        if (newSavedState) {
+          await saveProductAction(product.barcode);
+        } else {
+          await unsaveProductAction(product.barcode);
+        }
+      } catch (err) {
+        // Revert on error
+        setIsSaved(!newSavedState);
+        console.error("Failed to save product", err);
+      }
+    });
+  };
+
   return (
     <div className="flex flex-col gap-4 pb-8">
-      {/* Background tint overlay (stops above the bottom nav so we don't tint the chrome) */}
       {(verdict.tier === "unsafe" || verdict.tier === "caution") && (
         <div 
           className={`fixed inset-0 -z-10 ${
@@ -117,7 +149,7 @@ export default function ProductResult({
           aria-hidden="true"
         />
       )}
-      {/* Verdict card */}
+      
       <div className={`rounded-2xl border p-5 ${display.card}`}>
         <span
           className={`inline-block rounded-full px-3 py-1 text-sm font-bold uppercase tracking-wide ${display.badge}`}
@@ -127,30 +159,61 @@ export default function ProductResult({
         <p className="mt-2 text-base font-medium text-gray-800">{display.blurb}</p>
       </div>
 
-      {/* Product details (when we have them) */}
       {found && product && (
-        <div className="flex items-center gap-4 rounded-2xl border border-gray-200 p-4">
-          {product.imageUrl && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={product.imageUrl}
-              alt={product.name ?? "Product"}
-              className="h-20 w-20 shrink-0 rounded-lg object-contain"
-            />
-          )}
-          <div className="min-w-0">
-            <p className="line-clamp-2 text-lg font-semibold text-gray-900">
-              {product.name ?? "Unnamed product"}
-            </p>
-            {product.brand && (
-              <p className="truncate text-sm text-gray-500">{product.brand}</p>
+        <div className="flex flex-col gap-3 rounded-2xl border border-gray-200 p-4">
+          <div className="flex items-center gap-4">
+            {product.imageUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={product.imageUrl}
+                alt={product.name ?? "Product"}
+                className="h-20 w-20 shrink-0 rounded-lg object-contain"
+              />
             )}
-            <p className="mt-1 text-xs text-gray-400">Barcode {product.barcode}</p>
+            <div className="min-w-0 flex-1">
+              <p className="line-clamp-2 text-lg font-semibold text-gray-900">
+                {product.name ?? "Unnamed product"}
+              </p>
+              {product.brand && (
+                <p className="truncate text-sm text-gray-500">{product.brand}</p>
+              )}
+              <p className="mt-1 text-xs text-gray-400">Barcode {product.barcode}</p>
+            </div>
           </div>
+          
+          {/* Save Button (only visible for signed-in users) */}
+          {isSignedIn && (
+            <div className="border-t border-gray-100 pt-3">
+              <button
+                onClick={handleToggleSave}
+                disabled={isPending}
+                className={`flex w-full items-center justify-center gap-2 rounded-xl border py-2.5 text-sm font-semibold transition-colors disabled:opacity-70 ${
+                  isSaved 
+                    ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100" 
+                    : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                {isSaved ? (
+                  <>
+                    <svg className="h-5 w-5 fill-current" viewBox="0 0 24 24">
+                      <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
+                    </svg>
+                    Saved
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                    </svg>
+                    Save
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Product not found */}
       {!found && (
         <div className="rounded-2xl border border-gray-200 p-4 text-gray-600">
           <p className="font-medium text-gray-800">Product not found</p>
@@ -161,7 +224,6 @@ export default function ProductResult({
         </div>
       )}
 
-      {/* Allergens */}
       <div className="flex flex-col gap-3 rounded-2xl border border-gray-200 p-4">
         <h2 className="text-sm font-semibold text-gray-700">Allergens in your profile</h2>
         <div className="flex flex-wrap gap-2">
@@ -190,11 +252,8 @@ export default function ProductResult({
         )}
       </div>
 
-      {/* Why — the evidence behind the verdict */}
       <div className="rounded-2xl border border-gray-200 p-4">
         <h2 className="text-sm font-semibold text-gray-700">Why this verdict</h2>
-        
-        {/* We list reasoning from profiled allergens, plus any detected non-profiled ones */}
         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-600">
           {[...profiledAllergens, ...nonProfiledDetected].map((allergen) => {
             const reasons = verdict.allergenVerdicts[allergen.id]?.reasoning || [];
@@ -207,7 +266,6 @@ export default function ProductResult({
         </ul>
       </div>
 
-      {/* Ingredients List */}
       {found && verdict.ingredientHighlights && verdict.ingredientHighlights.length > 0 && (
         <div className="rounded-2xl border border-gray-200 p-4 text-sm">
           <h2 className="mb-2 text-sm font-semibold text-gray-700">Ingredients</h2>
@@ -256,7 +314,6 @@ export default function ProductResult({
         </div>
       )}
 
-      {/* PERSISTENT verify-packaging notice — shown on EVERY tier (PRD hard rule) */}
       <div
         role="note"
         className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900"
@@ -266,14 +323,15 @@ export default function ProductResult({
         manufacturing can change — when in doubt, don&apos;t risk it.
       </div>
 
-      {/* Scan again */}
-      <button
-        type="button"
-        onClick={onRescan}
-        className="min-h-14 rounded-2xl bg-green-600 text-lg font-semibold text-white active:bg-green-700"
-      >
-        Scan another product
-      </button>
+      {!isSavedPage && onRescan && (
+        <button
+          type="button"
+          onClick={onRescan}
+          className="min-h-14 rounded-2xl bg-green-600 text-lg font-semibold text-white active:bg-green-700"
+        >
+          Scan another product
+        </button>
+      )}
     </div>
   );
 }
