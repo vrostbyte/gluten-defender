@@ -17,7 +17,7 @@ export default function EditableProfile({ initialAllergens, quizCompletedAt }: E
   const [isSaving, setIsSaving] = useState(false);
 
   const showPrompt = allergens.length === 0 && quizCompletedAt === null;
-  const [dismissPrompt, setDismissPrompt] = useState(false);
+  const [dismissed, setDismissed] = useState<boolean>(false);
 
   const handleRemove = async (id: string) => {
     if (!confirm('Are you sure you want to remove this allergen?')) return;
@@ -60,7 +60,11 @@ export default function EditableProfile({ initialAllergens, quizCompletedAt }: E
   return (
     <div className="flex flex-col gap-6">
       {/* Soft Post-Sign-In Prompt */}
-      {showPrompt && !dismissPrompt && (
+      {/* showPrompt handles the core logic (empty profile). 
+          !dismissed handles the session-only state. We intentionally only keep 
+          this in React state (no database/localStorage) so the card reappears 
+          on the next visit as a gentle reminder, rather than permanently nagging. */}
+      {showPrompt && !dismissed && (
         <div className="rounded-2xl border-2 border-blue-600 bg-blue-50 p-5 shadow-sm">
           <h2 className="text-lg font-bold text-gray-900 mb-1">Set up your defender</h2>
           <p className="text-sm text-gray-700 mb-4">
@@ -74,7 +78,8 @@ export default function EditableProfile({ initialAllergens, quizCompletedAt }: E
               Start quiz
             </Link>
             <button
-              onClick={() => setDismissPrompt(true)}
+              type="button"
+              onClick={() => setDismissed(true)}
               className="text-sm font-medium text-gray-600 active:text-gray-900"
             >
               Maybe later

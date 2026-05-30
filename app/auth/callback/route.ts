@@ -1,30 +1,27 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServerClient } from '@/lib/supabase/server';
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
+  // Supabase generated a code and sent it via email. The email link verifies 
+  // the code with Supabase, and Supabase sends the user to this callback.
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
-  // if "next" is in param, use it as the redirect URL
   const next = searchParams.get('next') ?? '/profile';
 
   if (code) {
     const supabase = await getSupabaseServerClient();
+    
+    // Our callback exchanges that single-use code for a persistent session.
+    // This is the core of the PKCE auth flow.
     const { error } = await supabase.auth.exchangeCodeForSession(code);
+    
     if (!error) {
-      const forwardedHost = request.headers.get('x-forwarded-host');
-      const isLocalhost = process.env.NODE_ENV === 'development';
-      
-      if (isLocalhost) {
-        // we can be sure that there is no load balancer in between, so no need to watch for X-Forwarded-Host
-        return NextResponse.redirect(`${origin}${next}`);
-      } else if (forwardedHost) {
-        return NextResponse.redirect(`https://${forwardedHost}${next}`);
-      } else {
-        return NextResponse.redirect(`${origin}${next}`);
-      }
+      // Redirect using the request's origin ensures it works seamlessly 
+      // on both Vercel preview URLs and custom domains without hardcoding.
+      return NextResponse.redirect(`${origin}${next}`);
     }
   }
 
-  // return the user to an error page with instructions
-  return NextResponse.redirect(`${origin}/auth/auth-code-error`);
+  // Auth code error (e.g., link expired)
+  return NextResponse.redirect(`${origin}/auth/sign-in?error=auth_callback_failed`);
 }
