@@ -4,6 +4,18 @@ import { getSupabaseServerClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 
+function getRequiredSiteUrl(): string {
+  const url = process.env.NEXT_PUBLIC_SITE_URL;
+  if (!url) {
+    throw new Error(
+      'NEXT_PUBLIC_SITE_URL environment variable is required for auth flows. ' +
+      'Set it to your application URL (e.g., http://localhost:3000 for local dev, ' +
+      'https://gluten-defender.vercel.app for production).'
+    );
+  }
+  return url;
+}
+
 export async function signIn(formData: FormData) {
   const email = formData.get('email') as string;
   const password = formData.get('password') as string;
@@ -28,11 +40,7 @@ export async function signUp(formData: FormData) {
 
   const supabase = await getSupabaseServerClient();
   
-  // To avoid needing absolute URLs in the server action, 
-  // you might prefer passing the origin from the client.
-  // For simplicity, we use the environment variable if available, 
-  // or a placeholder for development.
-  const origin = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
+  const origin = getRequiredSiteUrl();
 
   const { error } = await supabase.auth.signUp({
     email,
@@ -52,7 +60,7 @@ export async function signUp(formData: FormData) {
 export async function resetPassword(formData: FormData) {
   const email = formData.get('email') as string;
   const supabase = await getSupabaseServerClient();
-  const origin = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
+  const origin = getRequiredSiteUrl();
 
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: `${origin}/auth/update-password`,
