@@ -4,6 +4,8 @@ import {
   type ProductData,
   type ProductLookupResult,
 } from "@/lib/verdict";
+import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { DEFAULT_PROFILE, VerdictTier } from "@/lib/allergens/registry";
 
 /**
  * GET /api/product/[barcode]
@@ -132,9 +134,51 @@ export async function GET(
     return NextResponse.json(result);
   }
 
+  // --- Profile fetch ---
+  let activeProfile = DEFAULT_PROFILE;
+  try {
+    const supabase = await getSupabaseServerClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("allergens")
+        .eq("user_id", user.id)
+        .single();
+      
+      if (profile && profile.allergens && profile.allergens.length > 0) {
+        activeProfile = profile.allergens.map((a: any) => a.allergen_id);
+      }
+    }
+  } catch (error) {
+    // Fall back gracefully to DEFAULT_PROFILE
+  }
+
   // --- Product found: normalize, run the verdict, return both ---
   const product = toProductData(barcode, off.product);
   const verdict = computeVerdict(product);
+
+  // Recalculate worst tier based on active profile, if it's different
+  if (activeProfile !== DEFAULT_PROFILE) {
+    const TIER_WEIGHT: Record<VerdictTier, number> = {
+      unsafe: 4,
+      caution: 3,
+      unknown: 2,
+      likely_safe: 1,
+      safe: 0,
+    };
+    let worstTier: VerdictTier = "unknown";
+    if (activeProfile.length > 0) {
+      worstTier = "safe";
+      for (const allergenId of activeProfile) {
+        const t = verdict.allergenVerdicts[allergenId]?.tier || "unknown";
+        if (TIER_WEIGHT[t] > TIER_WEIGHT[worstTier]) {
+          worstTier = t;
+        }
+      }
+    }
+    verdict.tier = worstTier;
+  }
 
   const result: ProductLookupResult = {
     found: true,
