@@ -8,7 +8,7 @@ This pass establishes the foundational authentication and user profile architect
    - Installed `@supabase/ssr` to securely manage auth in Next.js App Router.
    - Replaced `lib/supabase/client.ts` with the new browser client.
    - Added `lib/supabase/server.ts` and `lib/supabase/middleware.ts` for server-side cookie management.
-   - Added a root `middleware.ts` to refresh the session across all routes.
+   - Added a root `proxy.ts` to refresh the session across all routes.
    - Added database types generated for the `user_profiles` schema.
 2. **Database Migration:**
    - Created `supabase/migrations/20260529000000_create_user_profiles.sql` which sets up the `user_profiles` table, enables Row Level Security (RLS), and adds an auto-create trigger when a new user signs up.

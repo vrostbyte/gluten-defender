@@ -1,6 +1,6 @@
 import { evaluateAllergen, ALLERGEN_REGISTRY } from './lib/allergens/registry';
 
-const gluten = ALLERGEN_REGISTRY.find(a => a.id === 'gluten');
+const gluten = ALLERGEN_REGISTRY.find(a => a.id === 'gluten')!;
 
 const cases = [
   {

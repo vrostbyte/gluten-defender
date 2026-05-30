@@ -1,0 +1,1 @@
+Reference research documents used to build the allergen registry. Sources are inline-cited; treat as starting points, not authoritative — verify against primary regulatory sources before significant changes.

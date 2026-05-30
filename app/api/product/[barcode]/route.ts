@@ -6,6 +6,7 @@ import {
 } from "@/lib/verdict";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { DEFAULT_PROFILE, VerdictTier } from "@/lib/allergens/registry";
+import type { AllergenProfileItem } from "@/lib/supabase/database.types";
 
 /**
  * GET /api/product/[barcode]
@@ -147,7 +148,7 @@ export async function GET(
         .single();
       
       if (profile && profile.allergens && profile.allergens.length > 0) {
-        activeProfile = profile.allergens.map((a: any) => a.allergen_id);
+        activeProfile = profile.allergens.map((a: AllergenProfileItem) => a.allergen_id);
       }
     }
   } catch (error) {

@@ -1,6 +1,6 @@
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import Link from "next/link";
-import { ALLERGEN_REGISTRY } from "@/lib/allergens/registry";
+import EditableProfile from "@/components/profile/EditableProfile";
 
 export const metadata = { title: "Profile" };
 
@@ -59,30 +59,11 @@ export default async function ProfilePage() {
         <p className="mt-2 text-xs text-gray-400">Country: {profile?.country || "US"}</p>
       </div>
 
-      <div className="mb-8 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-sm font-semibold text-gray-500">Allergen Profile</h2>
-        {allergens.length === 0 ? (
-          <p className="text-sm text-gray-600">
-            Using the default profile (gluten + milk). Personalization coming soon — we&apos;ll let you take a quick quiz to tailor verdicts to your specific allergens.
-          </p>
-        ) : (
-          <ul className="space-y-3">
-            {allergens.map((a: any) => {
-              const registryInfo = ALLERGEN_REGISTRY.find(r => r.id === a.allergen_id);
-              return (
-                <li key={a.allergen_id} className="flex flex-col">
-                  <span className="font-medium text-gray-900">
-                    {registryInfo?.icon} {registryInfo?.label || a.allergen_id}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    Severity: {a.severity}
-                    {a.sensitive_to_traces ? ' (sensitive to traces)' : ''}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+      <div className="mb-8">
+        <EditableProfile 
+          initialAllergens={allergens} 
+          quizCompletedAt={profile?.quiz_completed_at || null} 
+        />
       </div>
 
       <form action="/auth/sign-out" method="POST" className="mt-auto">

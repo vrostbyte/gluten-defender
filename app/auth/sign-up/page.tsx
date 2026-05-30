@@ -49,6 +49,7 @@ export default function SignUpPage() {
               name="email"
               type="email"
               required
+              autoComplete="email"
               className="mt-1 block w-full rounded-lg border border-gray-300 p-3 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
@@ -62,6 +63,7 @@ export default function SignUpPage() {
               name="password"
               type="password"
               required
+              autoComplete="new-password"
               className="mt-1 block w-full rounded-lg border border-gray-300 p-3 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
