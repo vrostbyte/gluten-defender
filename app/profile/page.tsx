@@ -151,7 +151,10 @@ export default async function ProfilePage() {
               };
               
               const tier = getWorstTier(productData);
-              const removeAction = unsaveProductAction.bind(null, p.barcode);
+              const removeAction = async () => {
+                "use server";
+                await unsaveProductAction(p.barcode);
+              };
 
               return (
                 <div key={p.barcode} className="relative flex overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">

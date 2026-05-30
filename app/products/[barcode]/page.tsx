@@ -3,6 +3,7 @@ import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { computeVerdict, type ProductData } from "@/lib/verdict";
 import { DEFAULT_PROFILE, VerdictTier } from "@/lib/allergens/registry";
 import ProductResult from "@/components/scanner/ProductResult";
+import ScrollToTop from "@/components/ScrollToTop";
 import Link from "next/link";
 import type { AllergenProfileItem } from "@/lib/supabase/database.types";
 
@@ -104,6 +105,7 @@ export default async function ProductDetailPage({
 
   return (
     <div className="flex min-h-screen flex-col bg-white p-4">
+      <ScrollToTop />
       <Link href="/profile" className="mb-6 inline-flex items-center text-sm font-semibold text-blue-600">
         ← Back
       </Link>

@@ -106,42 +106,79 @@ export default function EditableProfile({ initialAllergens, quizCompletedAt }: E
           </div>
         ) : (
           <div className="space-y-3">
-            {allergens.map((a) => {
+            {[...allergens].sort((a, b) => {
+               const severityWeight = { anaphylaxis: 4, allergy: 3, intolerance: 2, preference: 1 };
+               return (severityWeight[b.severity] || 0) - (severityWeight[a.severity] || 0);
+            }).map((a) => {
               const reg = ALLERGEN_REGISTRY.find(r => r.id === a.allergen_id);
               if (!reg) return null;
               
-              // Mapping identityColor to Tailwind classes manually for dynamic usage
-              const colorMap: Record<string, string> = {
-                amber: 'bg-amber-100 text-amber-800 border-amber-200',
-                blue: 'bg-blue-100 text-blue-800 border-blue-200',
+              const severityStyles = {
+                anaphylaxis: {
+                  card: 'bg-red-50 border-red-200',
+                  label: 'font-bold text-red-900',
+                  pill: 'bg-red-600 text-white',
+                  pillText: 'Anaphylactic',
+                  icon: <svg className="w-4 h-4 text-red-600 inline ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                },
+                allergy: {
+                  card: 'bg-white border-amber-300 shadow-sm',
+                  label: 'font-bold text-gray-900',
+                  pill: 'bg-amber-100 text-amber-800',
+                  pillText: 'Allergy',
+                  icon: null
+                },
+                intolerance: {
+                  card: 'bg-white border-gray-200',
+                  label: 'font-normal text-gray-900',
+                  pill: 'bg-gray-100 text-gray-600',
+                  pillText: 'Intolerance',
+                  icon: null
+                },
+                preference: {
+                  card: 'bg-white border-gray-200 opacity-80',
+                  label: 'font-normal text-gray-700',
+                  pill: 'bg-gray-100 text-gray-500',
+                  pillText: 'Preference',
+                  icon: null
+                }
               };
-              const colorClasses = colorMap[reg.identityColor] || 'bg-gray-100 text-gray-800 border-gray-200';
+              
+              const style = severityStyles[a.severity] || severityStyles.intolerance;
 
               return (
-                <div key={a.allergen_id} className={`p-4 rounded-xl border ${colorClasses} relative`}>
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="font-bold flex items-center gap-2">
-                      <span className="text-xl">{reg.icon}</span> {reg.label}
-                    </h3>
-                    <div className="flex gap-2">
+                <div key={a.allergen_id} className={`p-4 rounded-xl border ${style.card} relative flex flex-col gap-3`}>
+                  <div className="flex justify-between items-start">
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <h3 className={`flex items-center gap-2 ${style.label}`}>
+                          <span className="text-xl">{reg.icon}</span> {reg.label} {style.icon}
+                        </h3>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${style.pill}`}>
+                          {style.pillText}
+                        </span>
+                      </div>
+                      {a.sensitive_to_traces && (
+                        <span className="inline-block px-2 py-0.5 rounded border border-gray-200 bg-white text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-max">
+                          + Trace-sensitive
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-2 shrink-0 ml-2">
                       <button
                         onClick={() => setEditingItem(a)}
-                        className="text-xs font-semibold px-2 py-1 rounded bg-white/50 hover:bg-white/80 active:bg-white"
+                        className="text-xs font-semibold px-2 py-1 rounded bg-white/50 hover:bg-white/80 active:bg-white text-gray-700 border border-transparent hover:border-gray-200"
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => handleRemove(a.allergen_id)}
                         disabled={isSaving}
-                        className="text-xs font-semibold px-2 py-1 rounded bg-white/50 text-red-600 hover:bg-white/80 active:bg-white"
+                        className="text-xs font-semibold px-2 py-1 rounded bg-white/50 text-red-600 hover:bg-white/80 active:bg-white border border-transparent hover:border-red-100"
                       >
                         Remove
                       </button>
                     </div>
-                  </div>
-                  <div className="text-sm opacity-90">
-                    <p><span className="font-semibold">Severity:</span> {a.severity}</p>
-                    <p><span className="font-semibold">Traces:</span> {a.sensitive_to_traces ? 'Sensitive' : 'Not sensitive'}</p>
                   </div>
                 </div>
               );

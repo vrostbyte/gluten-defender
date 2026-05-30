@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { ALLERGEN_REGISTRY } from '@/lib/allergens/registry';
 import { saveProfile, AllergenProfileItem, SeverityType } from '@/app/onboarding/actions';
@@ -31,6 +31,12 @@ export default function OnboardingQuiz({ initialProfile = [] }: OnboardingQuizPr
   const [saveError, setSaveError] = useState('');
 
   const totalSteps = selectedAllergens.length > 0 ? selectedAllergens.length + 2 : 1;
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.scrollTo(0, 0);
+    }
+  }, [currentStepIndex]);
 
   const handleToggleAllergen = (id: string) => {
     setSelectedAllergens((prev) =>

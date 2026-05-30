@@ -57,19 +57,32 @@ const TIER_DISPLAY: Record<
 
 const COLOR_MAP: Record<string, { fill: string; outline: string; text: string; bgHighlight: string; tagBg: string }> = {
   amber: { 
-    fill: "bg-amber-100 border-amber-300", 
-    outline: "bg-transparent border-gray-200", 
-    text: "text-amber-800",
-    bgHighlight: "bg-amber-100",
-    tagBg: "bg-amber-200"
+    fill: "bg-amber-100 border-amber-300", outline: "bg-transparent border-gray-200", text: "text-amber-800", bgHighlight: "bg-amber-100", tagBg: "bg-amber-200"
   },
   blue: { 
-    fill: "bg-blue-100 border-blue-300", 
-    outline: "bg-transparent border-gray-200", 
-    text: "text-blue-800",
-    bgHighlight: "bg-blue-100",
-    tagBg: "bg-blue-200"
+    fill: "bg-blue-100 border-blue-300", outline: "bg-transparent border-gray-200", text: "text-blue-800", bgHighlight: "bg-blue-100", tagBg: "bg-blue-200"
   },
+  orange: {
+    fill: "bg-orange-100 border-orange-300", outline: "bg-transparent border-gray-200", text: "text-orange-800", bgHighlight: "bg-orange-100", tagBg: "bg-orange-200"
+  },
+  emerald: {
+    fill: "bg-emerald-100 border-emerald-300", outline: "bg-transparent border-gray-200", text: "text-emerald-800", bgHighlight: "bg-emerald-100", tagBg: "bg-emerald-200"
+  },
+  yellow: {
+    fill: "bg-yellow-100 border-yellow-300", outline: "bg-transparent border-gray-200", text: "text-yellow-800", bgHighlight: "bg-yellow-100", tagBg: "bg-yellow-200"
+  },
+  green: {
+    fill: "bg-green-100 border-green-300", outline: "bg-transparent border-gray-200", text: "text-green-800", bgHighlight: "bg-green-100", tagBg: "bg-green-200"
+  },
+  stone: {
+    fill: "bg-stone-100 border-stone-300", outline: "bg-transparent border-gray-200", text: "text-stone-800", bgHighlight: "bg-stone-100", tagBg: "bg-stone-200"
+  },
+  cyan: {
+    fill: "bg-cyan-100 border-cyan-300", outline: "bg-transparent border-gray-200", text: "text-cyan-800", bgHighlight: "bg-cyan-100", tagBg: "bg-cyan-200"
+  },
+  rose: {
+    fill: "bg-rose-100 border-rose-300", outline: "bg-transparent border-gray-200", text: "text-rose-800", bgHighlight: "bg-rose-100", tagBg: "bg-rose-200"
+  }
 };
 
 function AllergenPill({ allergenId, tier }: { allergenId: string; tier: VerdictTier }) {
@@ -115,26 +128,27 @@ export default function ProductResult({
   });
 
   const [isSaved, setIsSaved] = useState(isSavedByUser);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const handleToggleSave = () => {
     if (!found || !product || !isSignedIn) return;
+    setSaveError(null);
     
     // Optimistic update
     const newSavedState = !isSaved;
     setIsSaved(newSavedState);
 
     startTransition(async () => {
-      try {
-        if (newSavedState) {
-          await saveProductAction(product.barcode);
-        } else {
-          await unsaveProductAction(product.barcode);
-        }
-      } catch (err) {
+      const action = newSavedState ? saveProductAction : unsaveProductAction;
+      const res = await action(product.barcode);
+      if (res.ok) {
+        setIsSaved(res.isSaved);
+      } else {
         // Revert on error
         setIsSaved(!newSavedState);
-        console.error("Failed to save product", err);
+        setSaveError(res.error);
+        console.error("Failed to save product", res.error);
       }
     });
   };
@@ -160,7 +174,7 @@ export default function ProductResult({
       </div>
 
       {found && product && (
-        <div className="flex flex-col gap-3 rounded-2xl border border-gray-200 p-4">
+        <div className="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4">
           <div className="flex items-center gap-4">
             {product.imageUrl && (
               // eslint-disable-next-line @next/next/no-img-element
@@ -184,6 +198,9 @@ export default function ProductResult({
           {/* Save Button (only visible for signed-in users) */}
           {isSignedIn && (
             <div className="border-t border-gray-100 pt-3">
+              {saveError && (
+                <p className="mb-2 text-center text-xs text-red-600">{saveError}</p>
+              )}
               <button
                 onClick={handleToggleSave}
                 disabled={isPending}
@@ -215,7 +232,7 @@ export default function ProductResult({
       )}
 
       {!found && (
-        <div className="rounded-2xl border border-gray-200 p-4 text-gray-600">
+        <div className="rounded-2xl border border-gray-200 bg-white p-4 text-gray-600">
           <p className="font-medium text-gray-800">Product not found</p>
           <p className="mt-1 text-sm">
             We couldn&apos;t find barcode {result.barcode} in the database yet.
@@ -224,7 +241,7 @@ export default function ProductResult({
         </div>
       )}
 
-      <div className="flex flex-col gap-3 rounded-2xl border border-gray-200 p-4">
+      <div className="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-gray-700">Allergens in your profile</h2>
         <div className="flex flex-wrap gap-2">
           {profiledAllergens.map((allergen) => (
@@ -252,7 +269,7 @@ export default function ProductResult({
         )}
       </div>
 
-      <div className="rounded-2xl border border-gray-200 p-4">
+      <div className="rounded-2xl border border-gray-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-gray-700">Why this verdict</h2>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-600">
           {[...profiledAllergens, ...nonProfiledDetected].map((allergen) => {
@@ -267,7 +284,7 @@ export default function ProductResult({
       </div>
 
       {found && verdict.ingredientHighlights && verdict.ingredientHighlights.length > 0 && (
-        <div className="rounded-2xl border border-gray-200 p-4 text-sm">
+        <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm">
           <h2 className="mb-2 text-sm font-semibold text-gray-700">Ingredients</h2>
           <div className="leading-relaxed text-gray-700">
             {verdict.ingredientHighlights.map((token, i) => {
@@ -299,16 +316,24 @@ export default function ProductResult({
             })}
           </div>
           
-          <div className="mt-4 flex flex-wrap gap-4 border-t border-gray-100 pt-3 text-xs text-gray-500">
-            <div className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-3 rounded bg-amber-100"></span>
-              <span>Known allergen source</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="inline-block border-b-2 border-dashed border-gray-400 font-medium text-gray-800">
-                word
-              </span>
-              <span>Ambiguous ingredient</span>
+          <div className="mt-4 flex flex-col gap-3 border-t border-gray-100 pt-3 text-xs text-gray-500">
+            <p className="font-semibold text-gray-600">Legend:</p>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              {ALLERGEN_REGISTRY.map(a => {
+                const c = COLOR_MAP[a.identityColor] || COLOR_MAP.amber;
+                return (
+                  <div key={a.id} className="flex items-center gap-1.5">
+                    <span className={`inline-block h-3 w-3 rounded ${c.bgHighlight}`}></span>
+                    <span>{a.label}</span>
+                  </div>
+                );
+              })}
+              <div className="flex items-center gap-1.5">
+                <span className="inline-block border-b-2 border-dashed border-gray-400 font-medium text-gray-800">
+                  word
+                </span>
+                <span>Ambiguous</span>
+              </div>
             </div>
           </div>
         </div>
