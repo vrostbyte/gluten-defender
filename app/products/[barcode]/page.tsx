@@ -6,6 +6,7 @@ import ProductResult from "@/components/scanner/ProductResult";
 import ScrollToTop from "@/components/ScrollToTop";
 import Link from "next/link";
 import type { AllergenProfileItem } from "@/lib/supabase/database.types";
+import { fetchCommunityNotes } from "@/lib/notesFetcher";
 
 export default async function ProductDetailPage({
   params,
@@ -19,12 +20,15 @@ export default async function ProductDetailPage({
   const supabase = await getSupabaseServerClient();
   
   let activeProfile = DEFAULT_PROFILE;
+  let hasProfileAllergens = false;
   let isSavedByUser = false;
   let isSignedIn = false;
+  let currentUserId: string | null = null;
 
   const { data: { user } } = await supabase.auth.getUser();
   if (user) {
     isSignedIn = true;
+    currentUserId = user.id;
     const { data: profile } = await supabase
       .from("user_profiles")
       .select("allergens")
@@ -32,6 +36,7 @@ export default async function ProductDetailPage({
       .single();
     
     if (profile && profile.allergens && profile.allergens.length > 0) {
+      hasProfileAllergens = true;
       activeProfile = profile.allergens.map((a: AllergenProfileItem) => a.allergen_id);
     }
 
@@ -94,6 +99,9 @@ export default async function ProductDetailPage({
     verdict.tier = worstTier;
   }
 
+  // Fetch Community Notes
+  const notes = await fetchCommunityNotes(barcode, currentUserId);
+
   const result = {
     found: true,
     barcode,
@@ -101,6 +109,10 @@ export default async function ProductDetailPage({
     verdict,
     isSavedByUser,
     isSignedIn,
+    notes,
+    currentUserId,
+    activeProfile,
+    hasProfileAllergens,
   };
 
   return (

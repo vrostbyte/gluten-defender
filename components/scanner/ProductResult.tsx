@@ -6,9 +6,16 @@ import { saveProductAction, unsaveProductAction } from "@/app/actions/saveProduc
 
 // We duplicate the API type here to avoid circular imports from route.ts
 import type { ProductLookupResult } from "@/lib/verdict";
+import { ReactionCallout } from "./ReactionCallout";
+import { CommunityNotesSection, type Note } from "./CommunityNotesSection";
+
 export interface APIProductLookupResult extends ProductLookupResult {
   isSavedByUser: boolean;
   isSignedIn: boolean;
+  notes?: Note[];
+  currentUserId?: string | null;
+  activeProfile?: string[];
+  hasProfileAllergens?: boolean;
 }
 
 /**
@@ -117,12 +124,13 @@ export default function ProductResult({
   onRescan?: () => void;
   isSavedPage?: boolean;
 }) {
-  const { found, product, verdict, isSavedByUser, isSignedIn } = result;
+  const { found, product, verdict, isSavedByUser, isSignedIn, notes = [], currentUserId = null, activeProfile = DEFAULT_PROFILE, hasProfileAllergens = false } = result;
   const display = TIER_DISPLAY[verdict.tier];
 
-  const profiledAllergens = ALLERGEN_REGISTRY.filter((a) => DEFAULT_PROFILE.includes(a.id));
+  const profiledAllergens = ALLERGEN_REGISTRY.filter((a) => activeProfile.includes(a.id));
   const nonProfiledDetected = ALLERGEN_REGISTRY.filter((a) => {
-    if (DEFAULT_PROFILE.includes(a.id)) return false;
+    // We exclude items already in activeProfile so they don't duplicate
+    if (activeProfile.includes(a.id)) return false;
     const t = verdict.allergenVerdicts[a.id]?.tier;
     return t === "unsafe" || t === "caution";
   });
@@ -172,6 +180,13 @@ export default function ProductResult({
         </span>
         <p className="mt-2 text-base font-medium text-gray-800">{display.blurb}</p>
       </div>
+
+      {notes.length > 0 && (
+        <ReactionCallout 
+          reactions={notes.filter(n => n.note_type === 'reaction').map(n => ({ authorAllergens: n.author.allergens?.map(a => a.allergen_id) || [] }))}
+          activeProfile={activeProfile}
+        />
+      )}
 
       {found && product && (
         <div className="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4">
@@ -347,6 +362,17 @@ export default function ProductResult({
         decision support, not medical advice, and never a guarantee. Ingredients and
         manufacturing can change — when in doubt, don&apos;t risk it.
       </div>
+
+      {found && product && (
+        <CommunityNotesSection
+          notes={notes}
+          productBarcode={product.barcode}
+          isSignedIn={isSignedIn}
+          currentUserId={currentUserId}
+          hasProfileAllergens={hasProfileAllergens}
+          activeProfile={activeProfile}
+        />
+      )}
 
       {!isSavedPage && onRescan && (
         <button

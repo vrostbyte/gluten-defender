@@ -38,6 +38,7 @@ export default function SignInPage() {
               id="email"
               name="email"
               type="email"
+              autoComplete="email"
               required
               className="mt-1 block w-full rounded-lg border border-gray-300 p-3 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
@@ -51,6 +52,7 @@ export default function SignInPage() {
               id="password"
               name="password"
               type="password"
+              autoComplete="current-password"
               required
               className="mt-1 block w-full rounded-lg border border-gray-300 p-3 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />

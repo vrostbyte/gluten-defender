@@ -528,7 +528,10 @@ export function evaluateAllergen(
   }
 
   // --- Empty data -> unknown ---
-  if (!ingredients.trim() && allergens.length === 0 && traces.length === 0 && labels.length === 0) {
+  // We don't check labels.length === 0 because unrelated labels (e.g. "no added sugar") 
+  // should not bypass the empty-data rule. If ingredients, allergens, and traces are empty, 
+  // and we didn't hit a certified-free label above, we have no safety data.
+  if (!ingredients.trim() && allergens.length === 0 && traces.length === 0) {
     return {
       tier: "unknown",
       reasoning: ["Insufficient product data to evaluate; read the label."]

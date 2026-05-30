@@ -8,6 +8,8 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getSupabaseAdminClient } from "@/lib/supabase/admin";
 import { DEFAULT_PROFILE, VerdictTier } from "@/lib/allergens/registry";
 import type { AllergenProfileItem } from "@/lib/supabase/database.types";
+import { fetchCommunityNotes } from "@/lib/notesFetcher";
+import type { Note } from "@/components/scanner/CommunityNotesSection";
 
 /**
  * GET /api/product/[barcode]
@@ -51,6 +53,10 @@ interface OffResponse {
 export interface APIProductLookupResult extends ProductLookupResult {
   isSavedByUser: boolean;
   isSignedIn: boolean;
+  notes?: Note[];
+  currentUserId?: string | null;
+  activeProfile?: string[];
+  hasProfileAllergens?: boolean;
 }
 
 function toProductData(barcode: string, off: NonNullable<OffResponse["product"]>): ProductData {
@@ -84,14 +90,17 @@ export async function GET(
 
   // --- Profile fetch & Saved fetch ---
   let activeProfile = DEFAULT_PROFILE;
+  let hasProfileAllergens = false;
   let isSavedByUser = false;
   let isSignedIn = false;
+  let currentUserId: string | null = null;
   
   const supabase = await getSupabaseServerClient();
   try {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       isSignedIn = true;
+      currentUserId = user.id;
       const { data: profile } = await supabase
         .from("user_profiles")
         .select("allergens")
@@ -99,6 +108,7 @@ export async function GET(
         .single();
       
       if (profile && profile.allergens && profile.allergens.length > 0) {
+        hasProfileAllergens = true;
         activeProfile = profile.allergens.map((a: AllergenProfileItem) => a.allergen_id);
       }
 
@@ -208,6 +218,10 @@ export async function GET(
       verdict: computeVerdict(null),
       isSavedByUser,
       isSignedIn,
+      notes: [],
+      currentUserId,
+      activeProfile,
+      hasProfileAllergens,
     };
     for (const key in result.verdict.allergenVerdicts) {
        result.verdict.allergenVerdicts[key].reasoning = ["This product is not in the database yet — please read the physical label."];
@@ -246,6 +260,9 @@ export async function GET(
     verdict.tier = worstTier;
   }
 
+  // Fetch Community Notes
+  const notes = await fetchCommunityNotes(barcode, currentUserId);
+
   const result: APIProductLookupResult = {
     found: true,
     barcode,
@@ -253,6 +270,10 @@ export async function GET(
     verdict,
     isSavedByUser,
     isSignedIn,
+    notes,
+    currentUserId,
+    activeProfile,
+    hasProfileAllergens,
   };
   return NextResponse.json(result);
 }

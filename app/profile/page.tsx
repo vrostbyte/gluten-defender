@@ -4,6 +4,7 @@ import EditableProfile from "@/components/profile/EditableProfile";
 import { computeVerdict, type ProductData } from "@/lib/verdict";
 import { DEFAULT_PROFILE, VerdictTier } from "@/lib/allergens/registry";
 import { unsaveProductAction } from "@/app/actions/saveProduct";
+import { ContributionsList, type Contribution } from "@/components/profile/ContributionsList";
 
 export const metadata = { title: "Profile" };
 
@@ -100,6 +101,46 @@ export default async function ProfilePage() {
     .order("saved_at", { ascending: false })
     .limit(50);
 
+  // Fetch user contributions
+  const { data: userNotes } = await supabase
+    .from("community_notes")
+    .select(`
+      id,
+      note_type,
+      body,
+      created_at,
+      helpful_count,
+      reported_count,
+      soft_hidden,
+      product_barcode,
+      products (
+        name,
+        image_url
+      )
+    `)
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(50);
+    
+  const formattedContributions: Contribution[] = (userNotes || []).map((note) => {
+    const pArray = Array.isArray(note.products) ? note.products : [note.products];
+    const p = pArray[0] as any;
+    return {
+      id: note.id,
+      note_type: note.note_type,
+      body: note.body,
+      created_at: note.created_at,
+      helpful_count: note.helpful_count,
+      reported_count: note.reported_count,
+      soft_hidden: note.soft_hidden,
+      product_barcode: note.product_barcode,
+      product: {
+        name: p?.name || null,
+        image_url: p?.image_url || null,
+      }
+    };
+  });
+
   return (
     <div className="flex min-h-screen flex-col p-4 pb-20">
       <h1 className="mb-6 mt-4 text-2xl font-bold text-gray-900">Profile</h1>
@@ -165,20 +206,22 @@ export default async function ProfilePage() {
                     ) : (
                       <div className="h-14 w-14 shrink-0 rounded-lg bg-gray-100" />
                     )}
-                    <div className="min-w-0 flex-1">
-                      <p className="line-clamp-1 font-semibold text-gray-900">{p.name || "Unnamed product"}</p>
-                      <p className="truncate text-xs text-gray-500">{p.brand}</p>
-                      <div className="mt-1 flex items-center gap-2">
+                    <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="line-clamp-1 font-semibold text-gray-900">{p.name || "Unnamed product"}</p>
+                        <p className="truncate text-xs text-gray-500">{p.brand}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5">{p.barcode}</p>
+                      </div>
+                      <div className="shrink-0">
                         <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${TIER_COLORS[tier]}`}>
                           {tier.replace('_', ' ')}
                         </span>
-                        <span className="text-[10px] text-gray-400">{p.barcode}</span>
                       </div>
                     </div>
                   </Link>
                   <div className="flex items-center justify-center border-l border-gray-100 bg-gray-50 px-3">
                     <form action={removeAction}>
-                      <button type="submit" className="p-2 text-sm font-medium text-red-600 active:text-red-800">
+                      <button type="submit" className="p-2 text-sm font-medium text-red-600 hover:bg-red-50 active:text-red-800 rounded">
                         Remove
                       </button>
                     </form>
@@ -188,6 +231,11 @@ export default async function ProfilePage() {
             })}
           </div>
         )}
+      </div>
+
+      <div className="mb-8">
+        <h2 className="mb-3 text-lg font-bold text-gray-900">Your contributions ({formattedContributions.length})</h2>
+        <ContributionsList contributions={formattedContributions} />
       </div>
 
       <form action="/auth/sign-out" method="POST" className="mt-auto">
